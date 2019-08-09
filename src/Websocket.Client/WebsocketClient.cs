@@ -6,6 +6,7 @@ using System.Reactive.Linq;
 using System.Reactive.Subjects;
 using System.Text;
 using System.Threading;
+using System.Threading.Channels;
 using System.Threading.Tasks;
 using Websocket.Client.Logging;
 
@@ -35,8 +36,10 @@ namespace Websocket.Client
         private readonly Subject<ReconnectionType> _reconnectionSubject = new Subject<ReconnectionType>();
         private readonly Subject<DisconnectionType> _disconnectedSubject = new Subject<DisconnectionType>();
 
-        private readonly BlockingCollection<string> _messagesTextToSendQueue = new BlockingCollection<string>();
-        private readonly BlockingCollection<byte[]> _messagesBinaryToSendQueue = new BlockingCollection<byte[]>();
+        private readonly Channel<string> _messagesTextToSendQueue = Channel.CreateUnbounded<string>();
+        private readonly Channel<byte[]> _messagesBinaryToSendQueue = Channel.CreateUnbounded<byte[]>();
+        //private readonly BlockingCollection<string> _messagesTextToSendQueue = new BlockingCollection<string>();
+        //private readonly BlockingCollection<byte[]> _messagesBinaryToSendQueue = new BlockingCollection<byte[]>();
 
 
         /// <summary>
@@ -155,7 +158,7 @@ namespace Websocket.Client
                 _client?.Dispose();
                 _cancellation?.Dispose();
                 _cancellationTotal?.Dispose();
-                _messagesTextToSendQueue?.Dispose();
+                //_messagesTextToSendQueue?.Dispose();
             }
             catch (Exception e)
             {
@@ -182,7 +185,7 @@ namespace Websocket.Client
             _cancellation = new CancellationTokenSource();
             _cancellationTotal = new CancellationTokenSource();
 
-            await StartClient(_url, _cancellation.Token, ReconnectionType.Initial).ConfigureAwait(false);
+            await StartClient(_url, _cancellation.Token, ReconnectionType.Initial);//.ConfigureAwait(false);
 
             StartBackgroundThreadForSendingText();
             StartBackgroundThreadForSendingBinary();
@@ -212,10 +215,13 @@ namespace Websocket.Client
         /// <param name="message">Text message to be sent</param>
         public Task Send(string message)
         {
+            if (!IsRunning)
+                throw new Exceptions.WebsocketException("websocket not connected");
+
             Validations.Validations.ValidateInput(message, nameof(message));
 
-            _messagesTextToSendQueue.Add(message);
-            return Task.CompletedTask;
+            return _messagesTextToSendQueue.Writer.WriteAsync(message).AsTask();
+            //return Task.CompletedTask;
         }
 
         /// <summary>
@@ -227,8 +233,8 @@ namespace Websocket.Client
         {
             Validations.Validations.ValidateInput(message, nameof(message));
 
-            _messagesBinaryToSendQueue.Add(message);
-            return Task.CompletedTask;
+            return _messagesBinaryToSendQueue.Writer.WriteAsync(message).AsTask();
+            //return Task.CompletedTask;
         }
 
         /// <summary>
@@ -272,7 +278,7 @@ namespace Websocket.Client
             try
             {
                 _reconnecting = true;
-                await Reconnect(ReconnectionType.ByUser).ConfigureAwait(false);
+                await Reconnect(ReconnectionType.ByUser);//.ConfigureAwait(false);
 
             }
             finally
@@ -285,17 +291,20 @@ namespace Websocket.Client
         {
             try
             {
-                foreach (var message in _messagesTextToSendQueue.GetConsumingEnumerable(_cancellationTotal.Token))
+                var reader = _messagesTextToSendQueue.Reader;
+                while (true)
                 {
+                    var message = await reader.ReadAsync(_cancellationTotal.Token);
                     try
                     {
-                        if (_reconnecting)
-                        {
-                            _messagesTextToSendQueue.Add(message);
-                            await Task.Delay(500);
-                            continue;
-                        }
-                        await SendInternal(message).ConfigureAwait(false);
+                        // do not resend here. let the user decide what to do when reconnecting
+                        //if (_reconnecting)
+                        //{
+                        //    await writer.WriteAsync(message);
+                        //    await Task.Delay(500);
+                        //    continue;
+                        //}
+                        await SendInternal(message);//.ConfigureAwait(false);
                     }
                     catch (Exception e)
                     {
@@ -329,17 +338,20 @@ namespace Websocket.Client
         {
             try
             {
-                foreach (var message in _messagesBinaryToSendQueue.GetConsumingEnumerable(_cancellationTotal.Token))
+                var reader = _messagesBinaryToSendQueue.Reader;
+                while (true)
                 {
+                    var message = await reader.ReadAsync(_cancellationTotal.Token);
                     try
                     {
-                        if (_reconnecting)
-                        {
-                            _messagesBinaryToSendQueue.Add(message);
-                            await Task.Delay(500);
-                            continue;
-                        }
-                        await SendInternal(message).ConfigureAwait(false);
+                        // do not resend here. let the user decide what to do when reconnecting
+                        //if (_reconnecting)
+                        //{
+                        //    _messagesBinaryToSendQueue.Add(message);
+                        //    await Task.Delay(500);
+                        //    continue;
+                        //}
+                        await SendInternal(message);//.ConfigureAwait(false);
                     }
                     catch (Exception e)
                     {
@@ -388,18 +400,18 @@ namespace Websocket.Client
             Logger.Trace(L($"Sending:  {message}"));
             var buffer = GetEncoding().GetBytes(message);
             var messageSegment = new ArraySegment<byte>(buffer);
-            var client = await GetClient().ConfigureAwait(false);
+            var client = await GetClient();//.ConfigureAwait(false);
             await client
                 .SendAsync(messageSegment, WebSocketMessageType.Text, true, _cancellation.Token)
-                .ConfigureAwait(false);
+                ;//.ConfigureAwait(false);
         }
 
         private async Task SendInternal(byte[] message)
         {
-            var client = await GetClient().ConfigureAwait(false);
+            var client = await GetClient();//.ConfigureAwait(false);
             await client
                 .SendAsync(new ArraySegment<byte>(message), WebSocketMessageType.Binary, true, _cancellation.Token)
-                .ConfigureAwait(false);
+                ;//.ConfigureAwait(false);
         }
 
         private async Task StartClient(Uri uri, CancellationToken token, ReconnectionType type)
@@ -409,7 +421,7 @@ namespace Websocket.Client
             
             try
             {
-                await _client.ConnectAsync(uri, token).ConfigureAwait(false);
+                await _client.ConnectAsync(uri, token);//.ConfigureAwait(false);
                 IsRunning = true;
                 _reconnectionSubject.OnNext(type);
 #pragma warning disable 4014
@@ -419,11 +431,12 @@ namespace Websocket.Client
             }
             catch (Exception e)
             {
+                IsRunning = false;
                 _disconnectedSubject.OnNext(DisconnectionType.Error);
                 Logger.Error(e, L($"Exception while connecting. " +
                                   $"Waiting {ErrorReconnectTimeoutMs/1000} sec before next reconnection try."));
-                await Task.Delay(ErrorReconnectTimeoutMs, token).ConfigureAwait(false);
-                await Reconnect(ReconnectionType.Error).ConfigureAwait(false);
+                await Task.Delay(ErrorReconnectTimeoutMs, token);//.ConfigureAwait(false);
+                await Reconnect(ReconnectionType.Error);//.ConfigureAwait(false);
             }       
         }
 
@@ -431,7 +444,7 @@ namespace Websocket.Client
         {
             if (_client == null || (_client.State != WebSocketState.Open && _client.State != WebSocketState.Connecting))
             {
-                await Reconnect(ReconnectionType.Lost).ConfigureAwait(false);
+                await Reconnect(ReconnectionType.Lost);//.ConfigureAwait(false);
             }
             return _client;
         }
@@ -447,7 +460,7 @@ namespace Websocket.Client
                 _disconnectedSubject.OnNext(TranslateTypeToDisconnection(type));
 
             _cancellation.Cancel();
-            await Task.Delay(1000).ConfigureAwait(false);
+            await Task.Delay(1000);//.ConfigureAwait(false);
 
             if (!IsReconnectionEnabled)
             {
@@ -459,7 +472,7 @@ namespace Websocket.Client
 
             Logger.Debug(L("Reconnecting..."));
             _cancellation = new CancellationTokenSource();
-            await StartClient(_url, _cancellation.Token, type).ConfigureAwait(false);
+            await StartClient(_url, _cancellation.Token, type);//.ConfigureAwait(false);
             _reconnecting = false;
         }
 
@@ -489,10 +502,19 @@ namespace Websocket.Client
                             var data = GetEncoding().GetString(ms.ToArray());
                             message = ResponseMessage.TextMessage(data);
                         }
-                        else
+                        else if (result.MessageType == WebSocketMessageType.Binary)
                         {
                             var data = ms.ToArray();
                             message = ResponseMessage.BinaryMessage(data);
+                        }
+                        else if (result.MessageType == WebSocketMessageType.Close)
+                        {
+                            _disconnectedSubject.OnNext(DisconnectionType.ByServer);
+                            continue;
+                        }
+                        else
+                        {
+                            throw new Exceptions.WebsocketBadInputException("unknown message type");
                         }
 
                         Logger.Trace(L($"Received:  {message}"));
