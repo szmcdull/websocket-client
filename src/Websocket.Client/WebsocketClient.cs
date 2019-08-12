@@ -38,8 +38,6 @@ namespace Websocket.Client
 
         private readonly Channel<string> _messagesTextToSendQueue = Channel.CreateUnbounded<string>();
         private readonly Channel<byte[]> _messagesBinaryToSendQueue = Channel.CreateUnbounded<byte[]>();
-        //private readonly BlockingCollection<string> _messagesTextToSendQueue = new BlockingCollection<string>();
-        //private readonly BlockingCollection<byte[]> _messagesBinaryToSendQueue = new BlockingCollection<byte[]>();
 
 
         /// <summary>
@@ -165,6 +163,7 @@ namespace Websocket.Client
                 Logger.Error(e, L($"Failed to dispose client, error: {e.Message}"));
             }
 
+            IsRunning = false;
             IsStarted = false;
             _disconnectedSubject.OnNext(DisconnectionType.Exit);
         }
@@ -278,7 +277,7 @@ namespace Websocket.Client
             try
             {
                 _reconnecting = true;
-                await Reconnect(ReconnectionType.ByUser);//.ConfigureAwait(false);
+                await Reconnect(ReconnectionType.ByUser);
 
             }
             finally
@@ -383,16 +382,12 @@ namespace Websocket.Client
 
         private void StartBackgroundThreadForSendingText()
         {
-#pragma warning disable 4014
-            Task.Factory.StartNew(_ => SendTextFromQueue(), TaskCreationOptions.LongRunning, _cancellationTotal.Token);
-#pragma warning restore 4014
+            _ = SendTextFromQueue();
         }
 
         private void StartBackgroundThreadForSendingBinary()
         {
-#pragma warning disable 4014
-            Task.Factory.StartNew(_ => SendBinaryFromQueue(), TaskCreationOptions.LongRunning, _cancellationTotal.Token);
-#pragma warning restore 4014
+            _ = SendBinaryFromQueue();
         }
 
         private async Task SendInternal(string message)
@@ -400,23 +395,16 @@ namespace Websocket.Client
             Logger.Trace(L($"Sending:  {message}"));
             var buffer = GetEncoding().GetBytes(message);
             var messageSegment = new ArraySegment<byte>(buffer);
-            var client = await GetClient();//.ConfigureAwait(false);
-            await client
-                .SendAsync(messageSegment, WebSocketMessageType.Text, true, _cancellation.Token)
-                ;//.ConfigureAwait(false);
+            await _client?.SendAsync(messageSegment, WebSocketMessageType.Text, true, _cancellation.Token);
         }
 
         private async Task SendInternal(byte[] message)
         {
-            var client = await GetClient();//.ConfigureAwait(false);
-            await client
-                .SendAsync(new ArraySegment<byte>(message), WebSocketMessageType.Binary, true, _cancellation.Token)
-                ;//.ConfigureAwait(false);
+            await _client?.SendAsync(new ArraySegment<byte>(message), WebSocketMessageType.Binary, true, _cancellation.Token);
         }
 
         private async Task StartClient(Uri uri, CancellationToken token, ReconnectionType type)
         {
-            DeactivateLastChance();
             _client = _clientFactory();
             
             try
@@ -426,7 +414,8 @@ namespace Websocket.Client
                 _reconnectionSubject.OnNext(type);
 #pragma warning disable 4014
                 Listen(_client, token);
-#pragma warning restore 4014               
+#pragma warning restore 4014
+                _lastReceivedMsg = DateTime.UtcNow;
                 ActivateLastChance();
             }
             catch (Exception e)
@@ -435,8 +424,8 @@ namespace Websocket.Client
                 _disconnectedSubject.OnNext(DisconnectionType.Error);
                 Logger.Error(e, L($"Exception while connecting. " +
                                   $"Waiting {ErrorReconnectTimeoutMs/1000} sec before next reconnection try."));
-                await Task.Delay(ErrorReconnectTimeoutMs, token);//.ConfigureAwait(false);
-                await Reconnect(ReconnectionType.Error);//.ConfigureAwait(false);
+                await Task.Delay(ErrorReconnectTimeoutMs, token);
+                await Reconnect(ReconnectionType.Error);
             }       
         }
 
@@ -444,7 +433,7 @@ namespace Websocket.Client
         {
             if (_client == null || (_client.State != WebSocketState.Open && _client.State != WebSocketState.Connecting))
             {
-                await Reconnect(ReconnectionType.Lost);//.ConfigureAwait(false);
+                await Reconnect(ReconnectionType.Lost);
             }
             return _client;
         }
@@ -459,8 +448,11 @@ namespace Websocket.Client
             if(type != ReconnectionType.Error)
                 _disconnectedSubject.OnNext(TranslateTypeToDisconnection(type));
 
+            _client?.Abort();
+            _client?.Dispose();
+            _client = null;
             _cancellation.Cancel();
-            await Task.Delay(1000);//.ConfigureAwait(false);
+            await Task.Delay(1000);
 
             if (!IsReconnectionEnabled)
             {
@@ -472,7 +464,7 @@ namespace Websocket.Client
 
             Logger.Debug(L("Reconnecting..."));
             _cancellation = new CancellationTokenSource();
-            await StartClient(_url, _cancellation.Token, type);//.ConfigureAwait(false);
+            await StartClient(_url, _cancellation.Token, type);
             _reconnecting = false;
         }
 
@@ -534,43 +526,54 @@ namespace Websocket.Client
             }
             catch (Exception e)
             {
-                Logger.Error(e, L("Error while listening to websocket stream"));
+                Logger.Error(e, L($"Error while listening to websocket stream, error: '{e.Message}'"));
+
+                if (_disposing || _reconnecting)
+                    return;
+
+                // listening thread is lost, we have to reconnect
+#pragma warning disable 4014
+                Reconnect(ReconnectionType.Lost);
+#pragma warning restore 4014
             }
         }
 
         private void ActivateLastChance()
         {
             var timerMs = 1000 * 5;
-            _lastChanceTimer = new Timer(LastChance, null, timerMs, timerMs);
+            //_lastChanceTimer = new Timer(LastChance, null, timerMs, timerMs);
+            _ = LastChance();
         }
 
         private void DeactivateLastChance()
         {
-            _lastChanceTimer?.Dispose();
-            _lastChanceTimer = null;
+            //_lastChanceTimer?.Dispose();
+            //_lastChanceTimer = null;
         }
 
-        private void LastChance(object state)
+        private async Task LastChance()
         {
-            var timeoutMs = Math.Abs(ReconnectTimeoutMs);
-            var diffMs = Math.Abs(DateTime.UtcNow.Subtract(_lastReceivedMsg).TotalMilliseconds);
-            if (diffMs > timeoutMs)
+            while (true)
             {
-                if (!IsReconnectionEnabled)
+                await Task.Delay(TimeSpan.FromSeconds(5));
+
+                var timeoutMs = Math.Abs(ReconnectTimeoutMs);
+                var diffMs = Math.Abs(DateTime.UtcNow.Subtract(_lastReceivedMsg).TotalMilliseconds);
+                if (diffMs > timeoutMs && !(_client?.State == WebSocketState.Connecting))
                 {
-                    // reconnection disabled, do nothing
-                    DeactivateLastChance();
-                    return;
+                    if (!IsReconnectionEnabled)
+                    {
+                        // reconnection disabled, do nothing
+                        DeactivateLastChance();
+                        return;
+                    }
+
+                    Logger.Debug(L($"Last message received more than {timeoutMs:F} ms ago. Hard restart.."));
+
+                    //_client?.Abort();
+                    //_client?.Dispose();
+                    _ = Reconnect(ReconnectionType.NoMessageReceived);
                 }
-
-                Logger.Debug(L($"Last message received more than {timeoutMs:F} ms ago. Hard restart.."));
-
-                DeactivateLastChance();
-                _client?.Abort();
-                _client?.Dispose();
-#pragma warning disable 4014
-                Reconnect(ReconnectionType.NoMessageReceived);
-#pragma warning restore 4014
             }
         }
 
