@@ -20,7 +20,6 @@ namespace Websocket.Client
         private static readonly ILog Logger = LogProvider.GetCurrentClassLogger();
 
         private Uri _url;
-        private Timer _lastChanceTimer;
         private readonly Func<ClientWebSocket> _clientFactory;
 
         private DateTime _lastReceivedMsg = DateTime.UtcNow; 
@@ -149,7 +148,6 @@ namespace Websocket.Client
             Logger.Debug(L("Disposing.."));
             try
             {
-                _lastChanceTimer?.Dispose();
                 _cancellation?.Cancel();
                 _cancellationTotal?.Cancel();
                 _client?.Abort();
@@ -307,7 +305,7 @@ namespace Websocket.Client
                     }
                     catch (Exception e)
                     {
-                        Logger.Error(L($"Failed to send text message: '{message}'. Error: {e.Message}"));
+                        Logger.Error(e, L($"Failed to send text message: '{message}'"));
                     }
                 }
             }
@@ -354,7 +352,7 @@ namespace Websocket.Client
                     }
                     catch (Exception e)
                     {
-                        Logger.Error(L($"Failed to send binary message: '{message}'. Error: {e.Message}"));
+                        Logger.Error(e, L($"Failed to send binary message: '{message}'."));
                     }
                 }
             }
@@ -538,11 +536,13 @@ namespace Websocket.Client
             }
         }
 
+        Task _lastChanceTimer;
         private void ActivateLastChance()
         {
-            var timerMs = 1000 * 5;
+            //var timerMs = 1000 * 5;
             //_lastChanceTimer = new Timer(LastChance, null, timerMs, timerMs);
-            _ = LastChance();
+            if (_lastChanceTimer == null)
+                _lastChanceTimer = LastChance();
         }
 
         private void DeactivateLastChance()
@@ -555,7 +555,7 @@ namespace Websocket.Client
         {
             while (true)
             {
-                await Task.Delay(TimeSpan.FromSeconds(5));
+                await Task.Delay(TimeSpan.FromSeconds(5), _cancellation.Token);
 
                 var timeoutMs = Math.Abs(ReconnectTimeoutMs);
                 var diffMs = Math.Abs(DateTime.UtcNow.Subtract(_lastReceivedMsg).TotalMilliseconds);
