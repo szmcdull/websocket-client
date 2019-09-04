@@ -1,16 +1,15 @@
 ![Logo](websocket-logo.png)
 # Websocket .NET client [![Build Status](https://travis-ci.org/Marfusios/websocket-client.svg?branch=master)](https://travis-ci.org/Marfusios/websocket-client) [![NuGet version](https://badge.fury.io/nu/Websocket.Client.svg)](https://badge.fury.io/nu/Websocket.Client)
 
-This is a wrapper over native C# class `ClientWebSocket` with built-in reconnection and error handling. 
+This is a wrapper over native C# class `ClientWebSocket` with built-in reconnection and error handling. This is forked from [Marfusios/websocket-client](/Marfusios/websocket-client) with rewriting connection handling in a moderner and cleaner way. And it uses less threads (using async/await and [Channel](https://docs.microsoft.com/en-us/dotnet/api/system.threading.channels)).
 
-[Releases and breaking changes](https://github.com/Marfusios/websocket-client/releases)
 
 ### License: 
     MIT
 
 ### Features
 
-* installation via NuGet ([Websocket.Client](https://www.nuget.org/packages/Websocket.Client))
+* ~~installation via NuGet ([Websocket.Client](https://www.nuget.org/packages/Websocket.Client))~~
 * targeting .NET Standard 2.0 (.NET Core, Linux/MacOS compatible)
 * reactive extensions ([Rx.NET](https://github.com/Reactive-Extensions/Rx.NET))
 * integrated logging abstraction ([LibLog](https://github.com/damianh/LibLog))
@@ -71,7 +70,7 @@ But use it with caution, on every reconnection there will be a new instance.
 
 ### Reconnecting
 
-There is a built-in reconnection which invokes after 1 minute (default) of not receiving any messages from the server. It is possible to configure that timeout via `client.ReconnectTimeoutMs`. Also, there is a stream `ReconnectionHappened` which sends information about a type of reconnection. However, if you are subscribed to low rate channels, it is very likely that you will encounter that timeout - higher the timeout to a few minutes or call `PingRequest` by your own every few seconds. 
+There is a built-in reconnection which invokes after 1 minute (default) of not receiving any messages from the server. It is possible to configure that timeout via `client.ReceiveTimeoutMs`. Also, there is a stream `ReconnectionHappened` which sends information about a type of reconnection. However, if you are subscribed to low rate channels, it is very likely that you will encounter that timeout - higher the timeout to a few minutes or call `PingRequest` by your own every few seconds. 
 
 In the case of remote server outage, there is a built-in functionality which slows down reconnection requests (could be configured via `client.ErrorReconnectTimeoutMs`, the default is 1 minute).
 
@@ -205,7 +204,7 @@ But beware of [producer-consumer problem](https://en.wikipedia.org/wiki/Producer
 with an example how to ignore/discard buffered messages and always process only the last one. 
 
 
-### Available for help
+### Available for help (***from original author***)
 I do consulting, please don't hesitate to contact me if you have a custom solution you would like me to implement ([web](http://mkotas.cz/), 
 <m@mkotas.cz>)
 

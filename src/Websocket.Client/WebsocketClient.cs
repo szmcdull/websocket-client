@@ -94,7 +94,7 @@ namespace Websocket.Client
         /// Time range in ms, how long to wait before reconnecting if no message comes from server.
         /// Default 60000 ms (1 minute)
         /// </summary>
-        public int ReceiveTimeout { get; set; } = 60 * 1000;
+        public int ReceiveTimeoutMs { get; set; } = 60 * 1000;
 
         /// <summary>
         /// Time range in ms, how long to wait before reconnecting if last reconnection failed.
@@ -468,7 +468,7 @@ namespace Websocket.Client
                             WebSocketReceiveResult result;
                             do
                             {
-                                var timeoutTask = Task.Delay(ReceiveTimeout);
+                                var timeoutTask = Task.Delay(ReceiveTimeoutMs);
                                 var taskResult = _client.ReceiveAsync(buffer, token);
                                 var task = await Task.WhenAny(timeoutTask, taskResult);
                                 if (task == timeoutTask)
