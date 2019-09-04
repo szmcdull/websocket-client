@@ -15,21 +15,30 @@ namespace Websocket.Client
     /// <summary>
     /// A simple websocket client with built-in reconnection and error handling
     /// </summary>
-    public class WebsocketClient : IWebsocketClient
+    public class WebsocketClient //: IWebsocketClient
     {
+        public enum State
+        {
+            Disconnected,
+            Connecting,
+            Connected,
+        }
+
+        State state;
+        Task _connectionTask;
+        private CancellationTokenSource _cancelConnectionTask;
+
         private static readonly ILog Logger = LogProvider.GetCurrentClassLogger();
 
-        private Uri _url;
+        private Uri _uri;
         private readonly Func<ClientWebSocket> _clientFactory;
 
-        private DateTime _lastReceivedMsg = DateTime.UtcNow; 
+        //private DateTime _lastReceivedMsg = DateTime.UtcNow; 
 
         private bool _disposing;
-        private bool _reconnecting;
-        private bool _isReconnectionEnabled = true;
         private ClientWebSocket _client;
-        private CancellationTokenSource _cancellation;
-        private CancellationTokenSource _cancellationTotal;
+        //private CancellationTokenSource _cancellation;
+        //private CancellationTokenSource _cancellationTotal;
 
         private readonly Subject<ResponseMessage> _messageReceivedSubject = new Subject<ResponseMessage>();
         private readonly Subject<ReconnectionType> _reconnectionSubject = new Subject<ReconnectionType>();
@@ -48,7 +57,7 @@ namespace Websocket.Client
         {
             Validations.Validations.ValidateInput(url, nameof(url));
 
-            _url = url;
+            _uri = url;
             _clientFactory = clientFactory ?? (() => new ClientWebSocket
             {
                 Options = {KeepAliveInterval = new TimeSpan(0, 0, 5, 0)}
@@ -58,11 +67,11 @@ namespace Websocket.Client
         /// <inheritdoc />
         public Uri Url
         {
-            get => _url;
+            get => _uri;
             set
             {
                 Validations.Validations.ValidateInput(value, nameof(Url));
-                _url = value;
+                _uri = value;
             }
         }
 
@@ -85,37 +94,18 @@ namespace Websocket.Client
         /// Time range in ms, how long to wait before reconnecting if no message comes from server.
         /// Default 60000 ms (1 minute)
         /// </summary>
-        public int ReconnectTimeoutMs { get; set; } = 60 * 1000;
+        public int ReceiveTimeout { get; set; } = 60 * 1000;
 
         /// <summary>
         /// Time range in ms, how long to wait before reconnecting if last reconnection failed.
         /// Default 60000 ms (1 minute)
         /// </summary>
-        public int ErrorReconnectTimeoutMs { get; set; } = 60 * 1000;
+        public int ErrorReconnectTimeoutMs { get; set; } = 10 * 1000;
 
         /// <summary>
         /// Enable or disable reconnection functionality (enabled by default)
         /// </summary>
-        public bool IsReconnectionEnabled
-        {
-            get => _isReconnectionEnabled;
-            set
-            {
-                _isReconnectionEnabled = value;
-
-                if (IsStarted)
-                {
-                    if (_isReconnectionEnabled)
-                    {
-                        ActivateLastChance();
-                    }
-                    else
-                    {
-                        DeactivateLastChance();
-                    }
-                }
-            }
-        }
+        public bool IsReconnectionEnabled { get; set; } = true;
 
         /// <summary>
         /// Get or set the name of the current websocket client instance.
@@ -127,11 +117,6 @@ namespace Websocket.Client
         /// Returns true if Start() method was called at least once. False if not started or disposed
         /// </summary>
         public bool IsStarted { get; private set; }
-
-        /// <summary>
-        /// Returns true if client is running and connected to the server
-        /// </summary>
-        public bool IsRunning { get; private set; }
 
         /// <inheritdoc />
         public Encoding MessageEncoding { get; set; }
@@ -148,12 +133,12 @@ namespace Websocket.Client
             Logger.Debug(L("Disposing.."));
             try
             {
-                _cancellation?.Cancel();
-                _cancellationTotal?.Cancel();
+                //_cancellationTotal?.Cancel();
+                _cancelConnectionTask?.Cancel();
                 _client?.Abort();
                 _client?.Dispose();
-                _cancellation?.Dispose();
-                _cancellationTotal?.Dispose();
+                //_cancellationTotal?.Dispose();
+                _cancelConnectionTask.Dispose();
                 //_messagesTextToSendQueue?.Dispose();
             }
             catch (Exception e)
@@ -161,7 +146,6 @@ namespace Websocket.Client
                 Logger.Error(e, L($"Failed to dispose client, error: {e.Message}"));
             }
 
-            IsRunning = false;
             IsStarted = false;
             _disconnectedSubject.OnNext(DisconnectionType.Exit);
         }
@@ -179,10 +163,10 @@ namespace Websocket.Client
             IsStarted = true;
 
             Logger.Debug(L("Starting.."));
-            _cancellation = new CancellationTokenSource();
-            _cancellationTotal = new CancellationTokenSource();
+            //_cancellationTotal = new CancellationTokenSource();
+            _cancelConnectionTask = new CancellationTokenSource();
 
-            await StartClient(_url, _cancellation.Token, ReconnectionType.Initial);//.ConfigureAwait(false);
+            await StartClient(_uri, _cancelConnectionTask.Token, ReconnectionType.Initial);
 
             StartBackgroundThreadForSendingText();
             StartBackgroundThreadForSendingBinary();
@@ -191,17 +175,20 @@ namespace Websocket.Client
         /// <inheritdoc />
         public async Task<bool> Stop(WebSocketCloseStatus status, string statusDescription)
         {
+            if (_connectionTask != null)
+            {
+                _cancelConnectionTask.Cancel();
+                await _connectionTask;
+            }
+
             if (_client == null)
             {
                 IsStarted = false;
-                IsRunning = false;
                 return false;
             }
                 
-            await _client.CloseAsync(status, statusDescription, _cancellation?.Token ?? CancellationToken.None);
-            DeactivateLastChance();
+            await _client.CloseAsync(status, statusDescription, _cancelConnectionTask?.Token ?? CancellationToken.None);
             IsStarted = false;
-            IsRunning = false;
             return true;
         }
 
@@ -210,15 +197,18 @@ namespace Websocket.Client
         /// It inserts the message to the queue and actual sending is done on an other thread
         /// </summary>
         /// <param name="message">Text message to be sent</param>
-        public Task Send(string message)
+        public ValueTask Send(string message)
         {
-            if (!IsRunning)
+            if (!(_client?.State == WebSocketState.Open))
+            {
+                //if (IsReconnectionEnabled)
+                //    Reconnect();
                 throw new Exceptions.WebsocketException("websocket not connected");
+            }
 
             Validations.Validations.ValidateInput(message, nameof(message));
 
-            return _messagesTextToSendQueue.Writer.WriteAsync(message).AsTask();
-            //return Task.CompletedTask;
+            return _messagesTextToSendQueue.Writer.WriteAsync(message);
         }
 
         /// <summary>
@@ -226,12 +216,16 @@ namespace Websocket.Client
         /// It inserts the message to the queue and actual sending is done on an other thread
         /// </summary>
         /// <param name="message">Binary message to be sent</param>
-        public Task Send(byte[] message)
+        public ValueTask Send(byte[] message)
         {
+            if (!(_client?.State == WebSocketState.Open))
+            {
+                throw new Exceptions.WebsocketException("websocket not connected");
+            }
+
             Validations.Validations.ValidateInput(message, nameof(message));
 
-            return _messagesBinaryToSendQueue.Writer.WriteAsync(message).AsTask();
-            //return Task.CompletedTask;
+            return _messagesBinaryToSendQueue.Writer.WriteAsync(message);
         }
 
         /// <summary>
@@ -241,12 +235,12 @@ namespace Websocket.Client
         /// on the full .NET Framework platform
         /// </summary>
         /// <param name="message">Message to be sent</param>
-        public Task SendInstant(string message)
-        {
-            Validations.Validations.ValidateInput(message, nameof(message));
+        //public Task SendInstant(string message)
+        //{
+        //    Validations.Validations.ValidateInput(message, nameof(message));
 
-            return SendInternal(message);
-        }
+        //    return SendInternal(message);
+        //}
 
         /// <summary>
         /// Send binary message to the websocket channel. 
@@ -255,33 +249,31 @@ namespace Websocket.Client
         /// on the full .NET Framework platform
         /// </summary>
         /// <param name="message">Message to be sent</param>
-        public Task SendInstant(byte[] message)
-        {
-            return SendInternal(message);
-        }
+        //public Task SendInstant(byte[] message)
+        //{
+        //    return SendInternal(message);
+        //}
 
         /// <summary>
         /// Force reconnection. 
         /// Closes current websocket stream and perform a new connection to the server.
         /// </summary>
-        public async Task Reconnect()
+        public Task Reconnect()
         {
             if (!IsStarted)
             {
                 Logger.Debug(L("Client not started, ignoring reconnection.."));
-                return;
+                return Task.CompletedTask;
             }
 
-            try
+            if (_connectionTask != null)
             {
-                _reconnecting = true;
-                await Reconnect(ReconnectionType.ByUser);
-
+                _cancelConnectionTask.Cancel();
+                _cancelConnectionTask = new CancellationTokenSource();
             }
-            finally
-            {
-                _reconnecting = false;
-            }
+            var completionSource = new TaskCompletionSource<int>();
+            _connectionTask = HandleConnection(completionSource, _uri, ReconnectionType.ByUser, _cancelConnectionTask.Token);
+            return completionSource.Task;
         }
 
         private async Task SendTextFromQueue()
@@ -291,7 +283,7 @@ namespace Websocket.Client
                 var reader = _messagesTextToSendQueue.Reader;
                 while (true)
                 {
-                    var message = await reader.ReadAsync(_cancellationTotal.Token);
+                    var message = await reader.ReadAsync(_cancelConnectionTask.Token);
                     try
                     {
                         // do not resend here. let the user decide what to do when reconnecting
@@ -319,7 +311,7 @@ namespace Websocket.Client
             }
             catch (Exception e)
             {
-                if (_cancellationTotal.IsCancellationRequested || _disposing)
+                if (_cancelConnectionTask.IsCancellationRequested || _disposing)
                 {
                     // disposing/canceling, do nothing and exit
                     return;
@@ -338,7 +330,7 @@ namespace Websocket.Client
                 var reader = _messagesBinaryToSendQueue.Reader;
                 while (true)
                 {
-                    var message = await reader.ReadAsync(_cancellationTotal.Token);
+                    var message = await reader.ReadAsync(_cancelConnectionTask.Token);
                     try
                     {
                         // do not resend here. let the user decide what to do when reconnecting
@@ -366,7 +358,7 @@ namespace Websocket.Client
             }
             catch (Exception e)
             {
-                if (_cancellationTotal.IsCancellationRequested || _disposing)
+                if (_cancelConnectionTask.IsCancellationRequested || _disposing)
                 {
                     // disposing/canceling, do nothing and exit
                     return;
@@ -393,186 +385,161 @@ namespace Websocket.Client
             Logger.Trace(L($"Sending:  {message}"));
             var buffer = GetEncoding().GetBytes(message);
             var messageSegment = new ArraySegment<byte>(buffer);
-            await _client?.SendAsync(messageSegment, WebSocketMessageType.Text, true, _cancellation.Token);
+            await _client?.SendAsync(messageSegment, WebSocketMessageType.Text, true, _cancelConnectionTask.Token);
         }
 
         private async Task SendInternal(byte[] message)
         {
-            await _client?.SendAsync(new ArraySegment<byte>(message), WebSocketMessageType.Binary, true, _cancellation.Token);
+            await _client?.SendAsync(new ArraySegment<byte>(message), WebSocketMessageType.Binary, true, _cancelConnectionTask.Token);
         }
 
-        private async Task StartClient(Uri uri, CancellationToken token, ReconnectionType type)
+        private Task StartClient(Uri uri, CancellationToken token, ReconnectionType type)
         {
-            _client = _clientFactory();
-            
-            try
-            {
-                await _client.ConnectAsync(uri, token);//.ConfigureAwait(false);
-                IsRunning = true;
-                _reconnectionSubject.OnNext(type);
-#pragma warning disable 4014
-                Listen(_client, token);
-#pragma warning restore 4014
-                _lastReceivedMsg = DateTime.UtcNow;
-                ActivateLastChance();
-            }
-            catch (Exception e)
-            {
-                IsRunning = false;
-                _disconnectedSubject.OnNext(DisconnectionType.Error);
-                Logger.Error(e, L($"Exception while connecting. " +
-                                  $"Waiting {ErrorReconnectTimeoutMs/1000} sec before next reconnection try."));
-                await Task.Delay(ErrorReconnectTimeoutMs, token);
-                await Reconnect(ReconnectionType.Error);
-            }       
+            var completionSource = new TaskCompletionSource<int>();
+            _connectionTask = HandleConnection(completionSource, uri, type, token);
+            return completionSource.Task;
         }
 
-        private async Task<ClientWebSocket> GetClient()
-        {
-            if (_client == null || (_client.State != WebSocketState.Open && _client.State != WebSocketState.Connecting))
-            {
-                await Reconnect(ReconnectionType.Lost);
-            }
-            return _client;
-        }
+        //private async Task<ClientWebSocket> GetClient()
+        //{
+        //    if (_client == null || (_client.State != WebSocketState.Open && _client.State != WebSocketState.Connecting))
+        //    {
+        //        await OnDisconnect(ReconnectionType.Lost);
+        //    }
+        //    return _client;
+        //}
 
-        private async Task Reconnect(ReconnectionType type)
-        {
-            IsRunning = false;
-            if (_disposing)
-                return;
+        //private async Task OnDisconnect(ReconnectionType type)
+        //{
+        //    if (_connecting)
+        //        return;
 
-            _reconnecting = true;
-            if(type != ReconnectionType.Error)
-                _disconnectedSubject.OnNext(TranslateTypeToDisconnection(type));
+        //    if (_disposing)
+        //        return;
 
-            _client?.Abort();
-            _client?.Dispose();
-            _client = null;
-            _cancellation.Cancel();
-            await Task.Delay(1000);
+        //    _connecting = true;
+        //    if(type != ReconnectionType.Error)
+        //        _disconnectedSubject.OnNext(TranslateTypeToDisconnection(type));
 
-            if (!IsReconnectionEnabled)
-            {
-                // reconnection disabled, do nothing
-                IsStarted = false;
-                _reconnecting = false;
-                return;
-            }
+        //    _client?.Abort();
+        //    _client?.Dispose();
+        //    _client = null;
+        //    _cancellation.Cancel();
+        //    await Task.Delay(1000);
 
-            Logger.Debug(L("Reconnecting..."));
-            _cancellation = new CancellationTokenSource();
-            await StartClient(_url, _cancellation.Token, type);
-            _reconnecting = false;
-        }
+        //    if (!IsReconnectionEnabled)
+        //    {
+        //        // reconnection disabled, do nothing
+        //        IsStarted = false;
+        //        _connecting = false;
+        //        return;
+        //    }
 
-        private async Task Listen(ClientWebSocket client, CancellationToken token)
-        {
-            try
-            {
-                do
-                {
-                    var buffer = new ArraySegment<byte>(new byte[8192]);
+        //    Logger.Debug(L("Reconnecting..."));
+        //    _cancellation = new CancellationTokenSource();
+        //    await StartClient(_uri, _cancellation.Token, type);
+        //    _connecting = false;
+        //}
 
-                    using (var ms = new MemoryStream())
-                    {
-                        WebSocketReceiveResult result;
-                        do
-                        {
-                            result = await _client.ReceiveAsync(buffer, token);
-                            if(buffer.Array != null)
-                                ms.Write(buffer.Array, buffer.Offset, result.Count);
-                        } while (!result.EndOfMessage);
-
-                        ms.Seek(0, SeekOrigin.Begin);
-
-                        ResponseMessage message;
-                        if (result.MessageType == WebSocketMessageType.Text)
-                        {
-                            var data = GetEncoding().GetString(ms.ToArray());
-                            message = ResponseMessage.TextMessage(data);
-                        }
-                        else if (result.MessageType == WebSocketMessageType.Binary)
-                        {
-                            var data = ms.ToArray();
-                            message = ResponseMessage.BinaryMessage(data);
-                        }
-                        else if (result.MessageType == WebSocketMessageType.Close)
-                        {
-                            _disconnectedSubject.OnNext(DisconnectionType.ByServer);
-                            continue;
-                        }
-                        else
-                        {
-                            throw new Exceptions.WebsocketBadInputException("unknown message type");
-                        }
-
-                        Logger.Trace(L($"Received:  {message}"));
-                        _lastReceivedMsg = DateTime.UtcNow;
-                        _messageReceivedSubject.OnNext(message);
-                    }
-
-                } while (client.State == WebSocketState.Open && !token.IsCancellationRequested);
-            }
-            catch (TaskCanceledException)
-            {
-                // task was canceled, ignore
-            }
-            catch (OperationCanceledException)
-            {
-                // operation was canceled, ignore
-            }
-            catch (Exception e)
-            {
-                Logger.Error(e, L($"Error while listening to websocket stream, error: '{e.Message}'"));
-
-                if (_disposing || _reconnecting)
-                    return;
-
-                // listening thread is lost, we have to reconnect
-#pragma warning disable 4014
-                Reconnect(ReconnectionType.Lost);
-#pragma warning restore 4014
-            }
-        }
-
-        Task _lastChanceTimer;
-        private void ActivateLastChance()
-        {
-            //var timerMs = 1000 * 5;
-            //_lastChanceTimer = new Timer(LastChance, null, timerMs, timerMs);
-            if (_lastChanceTimer == null)
-                _lastChanceTimer = LastChance();
-        }
-
-        private void DeactivateLastChance()
-        {
-            //_lastChanceTimer?.Dispose();
-            //_lastChanceTimer = null;
-        }
-
-        private async Task LastChance()
+        private async Task HandleConnection(TaskCompletionSource<int> connectionCompltionSource, Uri uri, ReconnectionType type, CancellationToken token)
         {
             while (true)
             {
-                await Task.Delay(TimeSpan.FromSeconds(5), _cancellation.Token);
-
-                var timeoutMs = Math.Abs(ReconnectTimeoutMs);
-                var diffMs = Math.Abs(DateTime.UtcNow.Subtract(_lastReceivedMsg).TotalMilliseconds);
-                if (diffMs > timeoutMs && !(_client?.State == WebSocketState.Connecting))
+                try
                 {
-                    if (!IsReconnectionEnabled)
+                    state = State.Connecting;
+                    if (_client != null)
+                        _client.Dispose();
+                    var client = _clientFactory();
+                    _client = client;
+                    await client.ConnectAsync(uri, token);
+                    state = State.Connected;
+                    //_lastReceivedMsg = DateTime.UtcNow;
+                    _reconnectionSubject.OnNext(type);
+                    connectionCompltionSource?.SetResult(1);
+                    connectionCompltionSource = null;
+
+                    do
                     {
-                        // reconnection disabled, do nothing
-                        DeactivateLastChance();
+                        var buffer = new ArraySegment<byte>(new byte[8192]);
+
+                        using (var ms = new MemoryStream())
+                        {
+                            WebSocketReceiveResult result;
+                            do
+                            {
+                                var timeoutTask = Task.Delay(ReceiveTimeout);
+                                var taskResult = _client.ReceiveAsync(buffer, token);
+                                var task = await Task.WhenAny(timeoutTask, taskResult);
+                                if (task == timeoutTask)
+                                    throw new TimeoutException("Websocket receive timeout!");
+
+                                result = taskResult.Result;
+                                if (buffer.Array != null)
+                                    ms.Write(buffer.Array, buffer.Offset, result.Count);
+                            } while (!result.EndOfMessage);
+
+                            ms.Seek(0, SeekOrigin.Begin);
+
+                            ResponseMessage message;
+                            if (result.MessageType == WebSocketMessageType.Text)
+                            {
+                                var data = GetEncoding().GetString(ms.ToArray());
+                                message = ResponseMessage.TextMessage(data);
+                            }
+                            else if (result.MessageType == WebSocketMessageType.Binary)
+                            {
+                                var data = ms.ToArray();
+                                message = ResponseMessage.BinaryMessage(data);
+                            }
+                            else if (result.MessageType == WebSocketMessageType.Close)
+                            {
+                                _disconnectedSubject.OnNext(DisconnectionType.ByServer);
+                                continue;
+                            }
+                            else
+                            {
+                                throw new Exceptions.WebsocketBadInputException("unknown message type");
+                            }
+
+                            Logger.Trace(L($"Received:  {message}"));
+                            //_lastReceivedMsg = DateTime.UtcNow;
+                            _messageReceivedSubject.OnNext(message);
+                        }
+
+                    } while (client.State == WebSocketState.Open && !token.IsCancellationRequested);
+                }
+                //catch (TaskCanceledException e)
+                //{
+                //    connectionCompltionSource?.SetException(e);
+                //    connectionCompltionSource = null;
+                //    return;
+                //}
+                catch (OperationCanceledException e) // cancellation signaled
+                {
+                    connectionCompltionSource?.SetException(e);
+                    connectionCompltionSource = null;
+                    return;
+                }
+                catch (Exception e)
+                {
+                    Logger.Error(e, L($"Error while listening to websocket stream, error: '{e.Message}'"));
+
+                    var delay = state == State.Connecting ? ErrorReconnectTimeoutMs : 1000;
+                    connectionCompltionSource?.SetException(e);
+                    connectionCompltionSource = null;
+                    _disconnectedSubject.OnNext(state == State.Connecting ? DisconnectionType.Error : DisconnectionType.Lost);
+                    state = State.Disconnected;
+
+                    if (_disposing)
                         return;
-                    }
 
-                    Logger.Debug(L($"Last message received more than {timeoutMs:F} ms ago. Hard restart.."));
+                    if (!IsReconnectionEnabled)
+                        return;
 
-                    //_client?.Abort();
-                    //_client?.Dispose();
-                    _ = Reconnect(ReconnectionType.NoMessageReceived);
+                    state = State.Connecting;
+                    type = state == State.Connecting ? ReconnectionType.Error : ReconnectionType.Lost;
+                    await Task.Delay(delay, token);
                 }
             }
         }
