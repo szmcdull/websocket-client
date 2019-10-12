@@ -137,6 +137,7 @@ namespace Websocket.Client
                 _cancelConnectionTask?.Cancel();
                 _client?.Abort();
                 _client?.Dispose();
+                _client = null;
                 //_cancellationTotal?.Dispose();
                 _cancelConnectionTask.Dispose();
                 //_messagesTextToSendQueue?.Dispose();
@@ -187,7 +188,8 @@ namespace Websocket.Client
                 return false;
             }
                 
-            await _client.CloseAsync(status, statusDescription, _cancelConnectionTask?.Token ?? CancellationToken.None);
+            if (_client != null)
+                await _client.CloseAsync(status, statusDescription, CancellationToken.None);
             IsStarted = false;
             return true;
         }
@@ -447,6 +449,9 @@ namespace Websocket.Client
             {
                 try
                 {
+                    if (token.IsCancellationRequested)
+                        return;
+
                     state = State.Connecting;
                     if (_client != null)
                         _client.Dispose();
@@ -469,7 +474,7 @@ namespace Websocket.Client
                             do
                             {
                                 var timeoutTask = Task.Delay(ReceiveTimeoutMs);
-                                var taskResult = _client.ReceiveAsync(buffer, token);
+                                var taskResult = client.ReceiveAsync(buffer, token);
                                 var task = await Task.WhenAny(timeoutTask, taskResult);
                                 if (task == timeoutTask)
                                     throw new TimeoutException("Websocket receive timeout!");
