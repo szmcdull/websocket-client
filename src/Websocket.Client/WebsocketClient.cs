@@ -179,7 +179,6 @@ namespace Websocket.Client
             if (_connectionTask != null)
             {
                 _cancelConnectionTask.Cancel();
-                await _connectionTask;
             }
 
             if (_client == null)
@@ -188,8 +187,20 @@ namespace Websocket.Client
                 return false;
             }
                 
+            // First send a close request to the server
             if (_client != null)
-                await _client.CloseAsync(status, statusDescription, CancellationToken.None);
+                await _client.CloseOutputAsync(status, statusDescription, CancellationToken.None);
+            // Then HandleConnection() will receive a close response, so that it can continue from ReceiveAsync() and exit.
+            if (_connectionTask != null)
+            {
+                try
+                {
+                    await _connectionTask;
+                }
+                catch (TaskCanceledException)
+                { }
+            }
+
             IsStarted = false;
             return true;
         }
@@ -450,7 +461,10 @@ namespace Websocket.Client
                 try
                 {
                     if (token.IsCancellationRequested)
+                    {
+                        Logger.Debug(L("HandleConnection() canceled"));
                         return;
+                    }
 
                     state = State.Connecting;
                     if (_client != null)
@@ -474,7 +488,10 @@ namespace Websocket.Client
                             do
                             {
                                 var timeoutTask = Task.Delay(ReceiveTimeoutMs);
-                                var taskResult = client.ReceiveAsync(buffer, token);
+                                // To prevent the websocket from aborted state, do not cancel a ReceiveAsync().
+                                // Instead check the cancel state after it finishes.
+                                var taskResult = client.ReceiveAsync(buffer, CancellationToken.None);
+                                token.ThrowIfCancellationRequested();
                                 var task = await Task.WhenAny(timeoutTask, taskResult);
                                 if (task == timeoutTask)
                                     throw new TimeoutException("Websocket receive timeout!");
@@ -482,6 +499,8 @@ namespace Websocket.Client
                                 result = taskResult.Result;
                                 if (buffer.Array != null)
                                     ms.Write(buffer.Array, buffer.Offset, result.Count);
+                                else
+                                    throw new Exception($"Unexpected array == null, type={result.MessageType}");
                             } while (!result.EndOfMessage);
 
                             ms.Seek(0, SeekOrigin.Begin);
@@ -514,16 +533,18 @@ namespace Websocket.Client
 
                     } while (client.State == WebSocketState.Open && !token.IsCancellationRequested);
                 }
-                //catch (TaskCanceledException e)
+                //catch (AggregateException e)
                 //{
-                //    connectionCompltionSource?.SetException(e);
+                //    connectionCompltionSource?.SetException(e.InnerException);
                 //    connectionCompltionSource = null;
+                //    Logger.Info($"HandleConnection() unhandled exception {e}");
                 //    return;
                 //}
                 catch (OperationCanceledException e) // cancellation signaled
                 {
                     connectionCompltionSource?.SetException(e);
                     connectionCompltionSource = null;
+                    Logger.Debug(L("HandleConnection() canceled 2"));
                     return;
                 }
                 catch (Exception e)
@@ -537,10 +558,16 @@ namespace Websocket.Client
                     state = State.Disconnected;
 
                     if (_disposing)
+                    {
+                        Logger.Debug(L("HandleConnection() exit due to disposing"));
                         return;
+                    }
 
                     if (!IsReconnectionEnabled)
+                    {
+                        Logger.Debug(L("HandleConnection() exit due to error and IsReconnectionEnabled=false"));
                         return;
+                    }
 
                     state = State.Connecting;
                     type = state == State.Connecting ? ReconnectionType.Error : ReconnectionType.Lost;
