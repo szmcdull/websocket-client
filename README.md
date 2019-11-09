@@ -9,7 +9,7 @@ This is a wrapper over native C# class `ClientWebSocket` with built-in reconnect
 
 ### Features
 
-* ~~installation via NuGet ([Websocket.Client](https://www.nuget.org/packages/Websocket.Client))~~
+* installation via NuGet ([Websocket.Client.Channel](https://www.nuget.org/packages/Websocket.Client.Channel))
 * targeting .NET Standard 2.0 (.NET Core, Linux/MacOS compatible)
 * reactive extensions ([Rx.NET](https://github.com/Reactive-Extensions/Rx.NET))
 * integrated logging abstraction ([LibLog](https://github.com/damianh/LibLog))

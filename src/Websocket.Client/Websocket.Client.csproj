@@ -3,23 +3,25 @@
   <PropertyGroup>
     <TargetFramework>netstandard2.0</TargetFramework>
     <LangVersion>latest</LangVersion>
-    <PackageId>Websocket.Client</PackageId>
-    <Version>3.1.0</Version>
-    <Authors>Mariusz Kotas</Authors>
-    <Description>Client for websocket API with built-in reconnection and error handling</Description>
+    <PackageId>Websocket.Client.Channel</PackageId>
+    <Version>3.2.0</Version>
+    <Authors>szmcdull, forked from Mariusz Kotas</Authors>
+    <Description>Client for websocket API with built-in reconnection and error handling.
+    This is forked from Marfusios/websocket-client with rewriting connection handling in a moderner and cleaner way.
+    And it uses less threads (using async/await and Channel).</Description>
     <PackageRequireLicenseAcceptance>false</PackageRequireLicenseAcceptance>
-    <PackageReleaseNotes>Release of version 3.0</PackageReleaseNotes>
-    <Copyright>Copyright 2019 Mariusz Kotas. All rights reserved.</Copyright>
+    <PackageReleaseNotes>First nuget package release</PackageReleaseNotes>
+    <Copyright>All rights reserved.</Copyright>
     <PackageTags>websockets websocket client</PackageTags>
-    <PackageLicenseUrl>https://github.com/Marfusios/websocket-client/blob/master/LICENSE</PackageLicenseUrl>
-    <PackageProjectUrl>https://github.com/Marfusios/websocket-client</PackageProjectUrl>
+    <PackageLicenseUrl>https://github.com/szmcdull/websocket-client/blob/master/LICENSE</PackageLicenseUrl>
+    <PackageProjectUrl>https://github.com/szmcdull/websocket-client</PackageProjectUrl>
     <PackageIconUrl>http://www.techbysample.com/wp-content/uploads/2017/03/websocket-1.png</PackageIconUrl>
     <RepositoryUrl>https://github.com/Marfusios/websocket-client</RepositoryUrl>
     <RepositoryType>Git</RepositoryType>
     <GeneratePackageOnBuild>true</GeneratePackageOnBuild>
     <GenerateDocumentationFile>true</GenerateDocumentationFile> 
-    <AssemblyVersion>3.1.0.0</AssemblyVersion>
-    <FileVersion>3.1.0.0</FileVersion>
+    <AssemblyVersion>3.2.0.0</AssemblyVersion>
+    <FileVersion>3.2.0.0</FileVersion>
   </PropertyGroup>
 
   <ItemGroup>
