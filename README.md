@@ -1,5 +1,5 @@
 ![Logo](websocket-logo.png)
-# Websocket .NET client [![Build Status](https://travis-ci.org/Marfusios/websocket-client.svg?branch=master)](https://travis-ci.org/Marfusios/websocket-client) [![NuGet version](https://badge.fury.io/nu/Websocket.Client.svg)](https://badge.fury.io/nu/Websocket.Client)
+# Websocket .NET client [![NuGet version](https://badge.fury.io/nu/Websocket.Client.Channel.svg)](https://badge.fury.io/nu/Websocket.Client.Channel)
 
 This is a wrapper over native C# class `ClientWebSocket` with built-in reconnection and error handling. This is forked from [Marfusios/websocket-client](/Marfusios/websocket-client) with rewriting connection handling in a moderner and cleaner way. And it uses less threads (using async/await and [Channel](https://docs.microsoft.com/en-us/dotnet/api/system.threading.channels)).
 
