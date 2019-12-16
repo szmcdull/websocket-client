@@ -100,7 +100,7 @@ namespace Websocket.Client
         /// Time range in ms, how long to wait before reconnecting if last reconnection failed.
         /// Default 60000 ms (1 minute)
         /// </summary>
-        public int ErrorReconnectTimeoutMs { get; set; } = 10 * 1000;
+        public int ErrorReconnectDelayMs { get; set; } = 10 * 1000;
 
         /// <summary>
         /// Enable or disable reconnection functionality (enabled by default)
@@ -310,7 +310,7 @@ namespace Websocket.Client
                     }
                     catch (Exception e)
                     {
-                        Logger.Error(e, L($"Failed to send text message: '{message}'"));
+                        Logger.Error(e, L("Failed to send text message: '{0}'"), message);
                     }
                 }
             }
@@ -395,7 +395,7 @@ namespace Websocket.Client
 
         private async Task SendInternal(string message)
         {
-            Logger.Trace(L($"Sending:  {message}"));
+            Logger.Trace(L("Sending: {0}"), message);
             var buffer = GetEncoding().GetBytes(message);
             var messageSegment = new ArraySegment<byte>(buffer);
             await _client?.SendAsync(messageSegment, WebSocketMessageType.Text, true, _cancelConnectionTask.Token);
@@ -471,7 +471,9 @@ namespace Websocket.Client
                         _client.Dispose();
                     var client = _clientFactory();
                     _client = client;
-                    await client.ConnectAsync(uri, token);
+                    await Task.WhenAny(client.ConnectAsync(uri, token), Task.Delay(ReceiveTimeoutMs));
+                    if (client.State != WebSocketState.Open)
+                        throw new TimeoutException($"{Name} connection timed out");
                     state = State.Connected;
                     //_lastReceivedMsg = DateTime.UtcNow;
                     _reconnectionSubject.OnNext(type);
@@ -526,7 +528,7 @@ namespace Websocket.Client
                                 throw new Exceptions.WebsocketBadInputException("unknown message type");
                             }
 
-                            Logger.Trace(L($"Received:  {message}"));
+                            Logger.Trace(L("Received: {0}"), message);
                             //_lastReceivedMsg = DateTime.UtcNow;
                             _messageReceivedSubject.OnNext(message);
                         }
@@ -551,7 +553,7 @@ namespace Websocket.Client
                 {
                     Logger.Error(e, L($"Error while listening to websocket stream, error: '{e.Message}'"));
 
-                    var delay = state == State.Connecting ? ErrorReconnectTimeoutMs : 1000;
+                    var delay = state == State.Connecting ? ErrorReconnectDelayMs : 1000;
                     connectionCompltionSource?.SetException(e);
                     connectionCompltionSource = null;
                     _disconnectedSubject.OnNext(state == State.Connecting ? DisconnectionType.Error : DisconnectionType.Lost);

@@ -4,13 +4,15 @@
     <TargetFramework>netstandard2.0</TargetFramework>
     <LangVersion>latest</LangVersion>
     <PackageId>Websocket.Client.Channel</PackageId>
-    <Version>3.2.0</Version>
+    <Version>3.3.0</Version>
     <Authors>szmcdull, forked from Mariusz Kotas</Authors>
     <Description>Client for websocket API with built-in reconnection and error handling.
     This is forked from Marfusios/websocket-client with rewriting connection handling in a moderner and cleaner way.
     And it uses less threads (using async/await and Channel).</Description>
     <PackageRequireLicenseAcceptance>false</PackageRequireLicenseAcceptance>
-    <PackageReleaseNotes>First nuget package release</PackageReleaseNotes>
+    <PackageReleaseNotes>1) Connecting now times out according to ReceiveTimeoutMs.
+    2) Renamed ErrorReconnectTimeoutMs to ErrorReconnectDelayMs to avoid confusion.
+    3) Improved logging performance.</PackageReleaseNotes>
     <Copyright>All rights reserved.</Copyright>
     <PackageTags>websockets websocket client</PackageTags>
     <PackageLicenseUrl>https://github.com/szmcdull/websocket-client/blob/master/LICENSE</PackageLicenseUrl>
@@ -20,8 +22,9 @@
     <RepositoryType>Git</RepositoryType>
     <GeneratePackageOnBuild>true</GeneratePackageOnBuild>
     <GenerateDocumentationFile>true</GenerateDocumentationFile> 
-    <AssemblyVersion>3.2.0.0</AssemblyVersion>
-    <FileVersion>3.2.0.0</FileVersion>
+    <AssemblyVersion>3.3.0.0</AssemblyVersion>
+    <FileVersion>3.3.0.0</FileVersion>
+    <Platforms>AnyCPU;x86</Platforms>
   </PropertyGroup>
 
   <ItemGroup>
