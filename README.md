@@ -14,6 +14,13 @@ This is a wrapper over native C# class `ClientWebSocket` with built-in reconnect
 * reactive extensions ([Rx.NET](https://github.com/Reactive-Extensions/Rx.NET))
 * integrated logging abstraction ([LibLog](https://github.com/damianh/LibLog))
 
+
+### !!! Compatibility Notice !!!
+* Enum type DisconnectionType and ReconnectionType are now merged into `ConnectionState`
+  * XXconnectionType.Error => ConnectionState.Failed
+  * XXconnectionType.NoMessageReceived => ConnectionState.RecvTimeout
+
+
 ### Usage
 
 ```csharp

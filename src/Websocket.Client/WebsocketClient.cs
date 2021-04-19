@@ -13,6 +13,47 @@ using Websocket.Client.Logging;
 namespace Websocket.Client
 {
     /// <summary>
+    /// Type that specify happened reconnection
+    /// </summary>
+    public enum ConnectionState
+    {
+        /// <summary>
+        /// Type used for initial connection to websocket stream
+        /// </summary>
+        Initial = 0,
+
+        /// <summary>
+        /// Type used when connection to websocket was lost in meantime
+        /// </summary>
+        Lost = 1,
+
+        /// <summary>
+        /// Type used when connection to websocket was lost by not receiving any message in given time-range
+        /// </summary>
+        RecvTimeout = 2,
+
+        /// <summary>
+        /// Connection attempt failed
+        /// </summary>
+        Failed = 3,
+
+        /// <summary>
+        /// Type used when reconnection was requested by user
+        /// </summary>
+        ClosedByUser = 4,
+
+        /// <summary>
+        /// Type used when connection requested to close by remote server
+        /// </summary>
+        ClosedByServer = 5,
+
+        /// <summary>
+        /// Type used for exit event, disposing of the websocket client
+        /// </summary>
+        Exit = 6,
+    }
+
+    /// <summary>
     /// A simple websocket client with built-in reconnection and error handling
     /// </summary>
     public class WebsocketClient //: IWebsocketClient
@@ -41,8 +82,8 @@ namespace Websocket.Client
         //private CancellationTokenSource _cancellationTotal;
 
         private readonly Subject<ResponseMessage> _messageReceivedSubject = new Subject<ResponseMessage>();
-        private readonly Subject<ReconnectionType> _reconnectionSubject = new Subject<ReconnectionType>();
-        private readonly Subject<DisconnectionType> _disconnectedSubject = new Subject<DisconnectionType>();
+        private readonly Subject<ConnectionState> _reconnectionSubject = new();
+        private readonly Subject<ConnectionState> _disconnectedSubject = new();
 
         private readonly Channel<string> _messagesTextToSendQueue = Channel.CreateUnbounded<string>();
         private readonly Channel<byte[]> _messagesBinaryToSendQueue = Channel.CreateUnbounded<byte[]>();
@@ -83,12 +124,12 @@ namespace Websocket.Client
         /// <summary>
         /// Stream for reconnection event (triggered after the new connection) 
         /// </summary>
-        public IObservable<ReconnectionType> ReconnectionHappened => _reconnectionSubject.AsObservable();
+        public IObservable<ConnectionState> ReconnectionHappened => _reconnectionSubject.AsObservable();
 
         /// <summary>
         /// Stream for disconnection event (triggered after the connection was lost) 
         /// </summary>
-        public IObservable<DisconnectionType> DisconnectionHappened => _disconnectedSubject.AsObservable();
+        public IObservable<ConnectionState> DisconnectionHappened => _disconnectedSubject.AsObservable();
 
         /// <summary>
         /// Time range in ms, how long to wait before reconnecting if no message comes from server.
@@ -148,7 +189,7 @@ namespace Websocket.Client
             }
 
             IsStarted = false;
-            _disconnectedSubject.OnNext(DisconnectionType.Exit);
+            _disconnectedSubject.OnNext(ConnectionState.Exit);
         }
        
         /// <summary>
@@ -167,7 +208,7 @@ namespace Websocket.Client
             //_cancellationTotal = new CancellationTokenSource();
             _cancelConnectionTask = new CancellationTokenSource();
 
-            await StartClient(_uri, _cancelConnectionTask.Token, ReconnectionType.Initial);
+            await StartClient(_uri, _cancelConnectionTask.Token, ConnectionState.Initial);
 
             StartBackgroundThreadForSendingText();
             StartBackgroundThreadForSendingBinary();
@@ -285,7 +326,7 @@ namespace Websocket.Client
                 _cancelConnectionTask = new CancellationTokenSource();
             }
             var completionSource = new TaskCompletionSource<int>();
-            _connectionTask = HandleConnection(completionSource, _uri, ReconnectionType.ByUser, _cancelConnectionTask.Token);
+            _connectionTask = HandleConnection(completionSource, _uri, ConnectionState.ClosedByUser, _cancelConnectionTask.Token);
             return completionSource.Task;
         }
 
@@ -406,7 +447,7 @@ namespace Websocket.Client
             await _client?.SendAsync(new ArraySegment<byte>(message), WebSocketMessageType.Binary, true, _cancelConnectionTask.Token);
         }
 
-        private Task StartClient(Uri uri, CancellationToken token, ReconnectionType type)
+        private Task StartClient(Uri uri, CancellationToken token, ConnectionState type)
         {
             var completionSource = new TaskCompletionSource<int>();
             _connectionTask = HandleConnection(completionSource, uri, type, token);
@@ -454,7 +495,7 @@ namespace Websocket.Client
         //    _connecting = false;
         //}
 
-        private async Task HandleConnection(TaskCompletionSource<int> connectionCompltionSource, Uri uri, ReconnectionType type, CancellationToken token)
+        private async Task HandleConnection(TaskCompletionSource<int> connectionCompltionSource, Uri uri, ConnectionState type, CancellationToken token)
         {
             while (true)
             {
@@ -520,7 +561,7 @@ namespace Websocket.Client
                             }
                             else if (result.MessageType == WebSocketMessageType.Close)
                             {
-                                _disconnectedSubject.OnNext(DisconnectionType.ByServer);
+                                _disconnectedSubject.OnNext(ConnectionState.ClosedByServer);
                                 continue;
                             }
                             else
@@ -556,7 +597,12 @@ namespace Websocket.Client
                     var delay = state == State.Connecting ? ErrorReconnectDelayMs : 1000;
                     connectionCompltionSource?.SetException(e);
                     connectionCompltionSource = null;
-                    _disconnectedSubject.OnNext(state == State.Connecting ? DisconnectionType.Error : DisconnectionType.Lost);
+                    var eventType = state == State.Connecting
+                        ? ConnectionState.Failed
+                        : e is TimeoutException
+                            ? ConnectionState.RecvTimeout
+                            : ConnectionState.Lost;
+                    _disconnectedSubject.OnNext(eventType);
                     state = State.Disconnected;
 
                     if (_disposing)
@@ -572,7 +618,7 @@ namespace Websocket.Client
                     }
 
                     state = State.Connecting;
-                    type = state == State.Connecting ? ReconnectionType.Error : ReconnectionType.Lost;
+                    type = eventType;
                     await Task.Delay(delay, token);
                 }
             }
@@ -589,12 +635,6 @@ namespace Websocket.Client
         {
             var name = Name ?? "CLIENT";
             return $"[WEBSOCKET {name}] {msg}";
-        }
-
-        private DisconnectionType TranslateTypeToDisconnection(ReconnectionType type)
-        {
-            // beware enum indexes must correspond to each other
-            return (DisconnectionType) type;
         }
     }
 }
