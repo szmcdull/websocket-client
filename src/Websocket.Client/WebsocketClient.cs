@@ -229,8 +229,15 @@ namespace Websocket.Client
             }
                 
             // First send a close request to the server
-            if (_client != null)
-                await _client.CloseOutputAsync(status, statusDescription, CancellationToken.None);
+            if (_client != null && (_client.State == WebSocketState.Open || _client.State == WebSocketState.CloseReceived))
+                try
+                {
+                    await _client.CloseOutputAsync(status, statusDescription, CancellationToken.None);
+                }
+                catch (Exception ex)
+                {
+                    Logger.Warn($"Failed to send close package: {ex}");
+                }
             // Then HandleConnection() will receive a close response, so that it can continue from ReceiveAsync() and exit.
             if (_connectionTask != null)
             {
