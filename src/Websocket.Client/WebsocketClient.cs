@@ -1,6 +1,7 @@
 ﻿using System;
 using System.Collections.Concurrent;
 using System.IO;
+using System.Net;
 using System.Net.WebSockets;
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
@@ -98,10 +99,20 @@ namespace Websocket.Client
         {
             Validations.Validations.ValidateInput(url, nameof(url));
 
+            var proxyServer = Environment.GetEnvironmentVariable("HTTPS_PROXY");
+            IWebProxy proxy = null;
+            if (proxyServer?.Length > 0)
+            {
+                proxy = new WebProxy(new Uri(proxyServer), true);
+            }
+
             _uri = url;
             _clientFactory = clientFactory ?? (() => new ClientWebSocket
             {
-                Options = {KeepAliveInterval = new TimeSpan(0, 0, 5, 0)}
+                Options = {
+                    KeepAliveInterval = new TimeSpan(0, 0, 5, 0),
+                    Proxy = proxy,
+                }
             }); 
         }
 
