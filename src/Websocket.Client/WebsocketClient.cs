@@ -338,14 +338,16 @@ namespace Websocket.Client
                 return Task.CompletedTask;
             }
 
-            if (_connectionTask != null)
-            {
-                _cancelConnectionTask.Cancel();
-                _cancelConnectionTask = new CancellationTokenSource();
-            }
-            var completionSource = new TaskCompletionSource<int>();
-            _connectionTask = HandleConnection(completionSource, _uri, ConnectionState.ClosedByUser, _cancelConnectionTask.Token);
-            return completionSource.Task;
+            return _client.CloseAsync(WebSocketCloseStatus.NormalClosure, "Reconnect requested", CancellationToken.None);
+
+            // if (_connectionTask != null)
+            // {
+            //     _cancelConnectionTask.Cancel();
+            //     _cancelConnectionTask = new CancellationTokenSource();
+            // }
+            // var completionSource = new TaskCompletionSource<int>();
+            // _connectionTask = HandleConnection(completionSource, _uri, ConnectionState.ClosedByUser, _cancelConnectionTask.Token);
+            // return completionSource.Task;
         }
 
         private async Task SendTextFromQueue()
@@ -593,6 +595,8 @@ namespace Websocket.Client
                         }
 
                     } while (client.State == WebSocketState.Open && !token.IsCancellationRequested);
+
+                    type = ConnectionState.ClosedByUser;
                 }
                 //catch (AggregateException e)
                 //{
